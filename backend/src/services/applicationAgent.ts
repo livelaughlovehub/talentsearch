@@ -165,133 +165,29 @@ ${config.userProfile.fullName}`;
       
       browser = await puppeteer.launch({
         headless: true,
-        args: [
-          '--no-sandbox', 
-          '--disable-setuid-sandbox',
-          '--disable-blink-features=AutomationControlled',
-          '--disable-features=IsolateOrigins,site-per-process',
-        ],
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
       });
 
       const page = await browser.newPage();
-      
-      // Set realistic user agent and headers to avoid bot detection
-      await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
       await page.setViewport({ width: 1920, height: 1080 });
-      
-      // Set extra headers
-      await page.setExtraHTTPHeaders({
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-      });
-      
-      // Remove webdriver property
-      await page.evaluateOnNewDocument(() => {
-        Object.defineProperty(navigator, 'webdriver', {
-          get: () => false,
-        });
-      });
       
       console.log(`📄 Navigating to: ${job.jobUrl}`);
       flowSteps.push(`Step 2: Navigating to ${job.jobUrl}`);
       
       await page.goto(job.jobUrl, { waitUntil: 'networkidle2', timeout: 30000 });
       
-      // Wait for page to fully load (handle "Just a moment..." and "Blocked" pages)
+      // Wait for page to fully load (handle "Just a moment..." pages)
       let pageTitle = await page.title();
       let attempts = 0;
-      while ((pageTitle.includes('Just a moment') || pageTitle.includes('Blocked') || pageTitle === '' || pageTitle === 'Loading...') && attempts < 15) {
-        console.log(`  ⏳ Waiting for page to load (attempt ${attempts + 1})... Title: ${pageTitle}`);
-        
-        // Try to interact with page to bypass bot detection
-        if (attempts > 2) {
-          try {
-            await page.mouse.move(Math.random() * 100, Math.random() * 100);
-            await page.evaluate(() => window.scrollTo(0, Math.random() * 500));
-            await delay(1000);
-          } catch (e) {
-            // Ignore interaction errors
-          }
-        }
-        
+      while ((pageTitle.includes('Just a moment') || pageTitle === '' || pageTitle === 'Loading...') && attempts < 10) {
+        console.log(`  ⏳ Waiting for page to load (attempt ${attempts + 1})...`);
         await delay(2000);
         pageTitle = await page.title();
         attempts++;
       }
       
-      // Check if still blocked
-      if (pageTitle.includes('Blocked')) {
-        console.log('  ⚠️ Page appears to be blocked by Cloudflare. Attempting to bypass...');
-        // Try more human-like interactions
-        try {
-          // Scroll slowly like a human
-          await page.evaluate(async () => {
-            const scrollHeight = document.body.scrollHeight;
-            const viewportHeight = window.innerHeight;
-            for (let i = 0; i < scrollHeight; i += 100) {
-              window.scrollTo(0, i);
-              await new Promise(resolve => setTimeout(resolve, 100));
-            }
-          });
-          await delay(3000);
-          
-          // Move mouse around
-          await page.mouse.move(100, 100);
-          await delay(500);
-          await page.mouse.move(500, 300);
-          await delay(500);
-          
-          // Wait for Cloudflare challenge to complete
-          await delay(5000);
-          pageTitle = await page.title();
-          
-          if (pageTitle.includes('Blocked')) {
-            console.log('  ❌ Still blocked after interaction attempts');
-            return {
-              success: false,
-              status: 'error',
-              message: 'Indeed is blocking automated access. Please try applying manually or wait a few minutes.',
-            };
-          }
-        } catch (e) {
-          console.log('  ⚠️ Error during Cloudflare bypass attempt:', e instanceof Error ? e.message : 'Unknown');
-        }
-      }
-      
-      // Additional wait for dynamic content and human-like behavior
+      // Additional wait for dynamic content
       await delay(3000);
-      
-      // Scroll down to find apply button (it's usually at the bottom of the job description)
-      console.log('  📜 Scrolling page to find apply button...');
-      try {
-        // Scroll to bottom slowly
-        await page.evaluate(async () => {
-          const scrollHeight = document.body.scrollHeight;
-          const viewportHeight = window.innerHeight;
-          for (let i = 0; i < scrollHeight; i += 200) {
-            window.scrollTo(0, i);
-            await new Promise(resolve => setTimeout(resolve, 150));
-          }
-          // Scroll back up a bit
-          window.scrollTo(0, scrollHeight * 0.7);
-        });
-        await delay(2000);
-        
-        // Scroll down a bit to trigger lazy loading
-        await page.evaluate(() => {
-          window.scrollTo(0, 300);
-        });
-        await delay(1000);
-        await page.evaluate(() => {
-          window.scrollTo(0, 0);
-        });
-        await delay(1000);
-      } catch (e) {
-        // Ignore scroll errors
-      }
       
       // Log page title and URL for debugging
       finalUrl = page.url();
@@ -299,18 +195,6 @@ ${config.userProfile.fullName}`;
       console.log(`🔗 Current URL: ${finalUrl}`);
       flowSteps.push(`Step 3: Page loaded - ${pageTitle}`);
       flowSteps.push(`Step 4: Current URL - ${finalUrl}`);
-      
-      // Check if we're still on a blocked page
-      if (pageTitle.includes('Blocked')) {
-        console.log('  ❌ Page is still blocked. Indeed may be detecting automation.');
-        flowSteps.push('Step 5: ERROR - Page blocked by Indeed');
-        return {
-          success: false,
-          status: 'error',
-          message: 'Indeed is blocking automated access. Please try applying manually or wait a few minutes before retrying.',
-          finalUrl,
-        };
-      }
       
       // Check if we're on a search results page instead of individual job
       // But be less aggressive for certain platforms that use different URL structures
@@ -430,48 +314,8 @@ ${config.userProfile.fullName}`;
     try {
       console.log('🔍 Searching for apply button on Indeed...');
       
-      // Check if page is still blocked
-      const pageTitle = await page.title();
-      if (pageTitle.includes('Blocked')) {
-        console.log('  ⚠️ Page is still blocked by Cloudflare');
-        return {
-          success: false,
-          status: 'error',
-          message: 'Indeed is blocking automated access. Please try applying manually or wait a few minutes before retrying. Cloudflare protection is active.',
-        };
-      }
-      
-      // Scroll to find the apply button (it's usually below the job description)
-      console.log('  📜 Scrolling page to locate apply button...');
-      await page.evaluate(async () => {
-        // Scroll to middle first (where job description usually is)
-        window.scrollTo(0, document.body.scrollHeight * 0.4);
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        // Then scroll to bottom where apply button usually is
-        window.scrollTo(0, document.body.scrollHeight * 0.8);
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        // Scroll back up a bit to where apply button typically appears
-        window.scrollTo(0, document.body.scrollHeight * 0.6);
-      });
-      await delay(3000);
-      
       // Wait for page to be fully interactive and for Indeed's apply widget to load
       await delay(5000);
-      
-      // Scroll to where the apply button typically appears (bottom of job description)
-      try {
-        await page.evaluate(() => {
-          const jobDescription = document.querySelector('[data-testid="job-description"], .jobsearch-JobComponent-description');
-          if (jobDescription) {
-            jobDescription.scrollIntoView({ behavior: 'smooth', block: 'end' });
-          } else {
-            window.scrollTo(0, document.body.scrollHeight * 0.6);
-          }
-        });
-        await delay(2000);
-      } catch (e) {
-        console.log('  ⚠️ Could not scroll to job description');
-      }
       
       // Wait specifically for the Indeed apply widget to appear
       try {
@@ -733,304 +577,92 @@ ${config.userProfile.fullName}`;
       }
 
       if (!applyButton) {
-        // More aggressive search: look for ANY button with "apply" in text, id, class, or aria-label
-        console.log('  🔍 Performing aggressive button search...');
-        const aggressiveButtonSearch = await page.evaluate(() => {
-          const allElements = Array.from(document.querySelectorAll('button, a, [role="button"], [onclick*="apply"]'));
-          const candidates: any[] = [];
-          
-          for (let i = 0; i < allElements.length; i++) {
-            const el = allElements[i] as HTMLElement;
-            const text = el.textContent?.toLowerCase().trim() || '';
-            const id = el.id?.toLowerCase() || '';
-            const className = el.className?.toString().toLowerCase() || '';
-            const ariaLabel = el.getAttribute('aria-label')?.toLowerCase() || '';
-            const dataTestId = el.getAttribute('data-testid')?.toLowerCase() || '';
-            const isDisabled = (el as HTMLButtonElement).disabled || false;
-            const isVisible = el.offsetWidth > 0 && el.offsetHeight > 0;
-            
-            // Check if element contains "apply" in any relevant attribute
-            const hasApply = text.includes('apply') || 
-                           id.includes('apply') || 
-                           className.includes('apply') ||
-                           ariaLabel.includes('apply') ||
-                           dataTestId.includes('apply');
-            
-            // Skip if already applied or company site redirect
-            const isApplied = text.includes('applied') || ariaLabel.includes('applied');
-            const isCompanySite = text.includes('company site') || text.includes('company website');
-            
-            if (hasApply && !isApplied && !isCompanySite && isVisible && !isDisabled) {
-              candidates.push({
-                index: i,
-                text: text.substring(0, 50),
-                id,
-                className: className.substring(0, 100),
-                ariaLabel,
-                dataTestId,
-                tagName: el.tagName,
-              });
-            }
-          }
-          
-          return candidates;
-        });
-        
-        console.log(`  📊 Found ${aggressiveButtonSearch.length} potential apply buttons:`);
-        aggressiveButtonSearch.slice(0, 5).forEach((btn: any, idx: number) => {
-          console.log(`    ${idx + 1}. "${btn.text}" (${btn.tagName}, id: ${btn.id || 'none'})`);
-        });
-        
-        if (aggressiveButtonSearch.length > 0) {
-          // Try the first candidate
-          const candidate = aggressiveButtonSearch[0];
-          const allElements = await page.$$('button, a, [role="button"]');
-          if (allElements[candidate.index]) {
-            applyButton = allElements[candidate.index];
-            foundSelector = 'aggressive-search';
-            console.log(`  ✅ Found apply button via aggressive search: "${candidate.text}"`);
-          }
-        }
-        
         // Check if there's a "Apply on company site" button as fallback
-        if (!applyButton) {
-          const companySiteButton = await page.evaluateHandle(() => {
-            const buttons = Array.from(document.querySelectorAll('button, a'));
-            return buttons.find((btn: any) => {
-              const text = btn.textContent?.toLowerCase() || '';
-              return text.includes('apply on company site') || text.includes('apply on company website');
-            });
+        const companySiteButton = await page.evaluateHandle(() => {
+          const buttons = Array.from(document.querySelectorAll('button, a'));
+          return buttons.find((btn: any) => {
+            const text = btn.textContent?.toLowerCase() || '';
+            return text.includes('apply on company site') || text.includes('apply on company website');
           });
+        });
+        
+        if (companySiteButton && companySiteButton.asElement()) {
+          console.log('  🔗 Found "Apply on company site" button as fallback');
+          await companySiteButton.asElement()!.click();
+          await delay(5000);
           
-          if (companySiteButton && companySiteButton.asElement()) {
-            console.log('  🔗 Found "Apply on company site" button as fallback');
-            await companySiteButton.asElement()!.click();
-            await delay(5000);
-            
-            const newUrl = page.url();
-            const atsType = this.detectATSType(newUrl);
-            if (atsType) {
-              return await this.applyToATS(page, browser, atsType, job, config, coverLetter);
-            }
-            return await this.fillFormWithAI(page.mainFrame(), page, config, coverLetter, job);
+          const newUrl = page.url();
+          const atsType = this.detectATSType(newUrl);
+          if (atsType) {
+            return await this.applyToATS(page, browser, atsType, job, config, coverLetter);
           }
+          return await this.fillFormWithAI(page.mainFrame(), page, config, coverLetter, job);
         }
         
-        // Check for iframes that might contain the apply button
-        if (!applyButton) {
-          console.log('  🔍 Checking for apply button in iframes...');
-          const frames = page.frames();
-          for (const frame of frames) {
-            if (frame !== page.mainFrame()) {
-              try {
-                const iframeButton = await frame.$('button#indeedApplyButton, button[data-testid*="apply"], button[id*="apply"]');
-                if (iframeButton) {
-                  console.log('  ✅ Found apply button in iframe!');
-                  applyButton = iframeButton;
-                  foundSelector = 'iframe';
-                  break;
-                }
-              } catch (e) {
-                // Frame might not be accessible
-                continue;
-              }
-            }
-          }
-        }
+        // Try to get page content for debugging
+        const pageContent = await page.content();
+        const hasApplyText = pageContent.toLowerCase().includes('apply');
         
-        if (!applyButton) {
-          // Try to get page content for debugging
-          const pageContent = await page.content();
-          const hasApplyText = pageContent.toLowerCase().includes('apply');
-          
-          console.log(`  ❌ Apply button not found after all attempts. Page contains "apply" text: ${hasApplyText}`);
-          console.log(`  📄 Page URL: ${page.url()}`);
-          
-          // Try to find any buttons/links for debugging
-          const allButtons = await page.evaluate(() => {
-            const buttons = Array.from(document.querySelectorAll('button, a'));
-            return buttons.slice(0, 20).map((btn: any) => ({
-              text: btn.textContent?.trim().substring(0, 50),
-              id: btn.id,
-              className: btn.className?.toString().substring(0, 100),
-              href: btn.href,
-              disabled: (btn as HTMLButtonElement).disabled,
-              visible: btn.offsetWidth > 0 && btn.offsetHeight > 0,
-            }));
-          });
-          console.log('  🔍 First 20 buttons/links found:', JSON.stringify(allButtons, null, 2));
-          
-          return {
-            success: false,
-            status: 'manual_required',
-            message: 'Apply button not found on Indeed after comprehensive search. Please check the page manually - the button may be in a different format or require interaction.',
-          };
-        }
+        console.log(`  ❌ Apply button not found. Page contains "apply" text: ${hasApplyText}`);
+        console.log(`  📄 Page URL: ${page.url()}`);
+        
+        // Try to find any buttons/links for debugging
+        const allButtons = await page.evaluate(() => {
+          const buttons = Array.from(document.querySelectorAll('button, a'));
+          return buttons.slice(0, 15).map((btn: any) => ({
+            text: btn.textContent?.trim().substring(0, 50),
+            id: btn.id,
+            className: btn.className,
+            href: btn.href,
+          }));
+        });
+        console.log('  🔍 First 15 buttons/links found:', JSON.stringify(allButtons, null, 2));
+        
+        return {
+          success: false,
+          status: 'manual_required',
+          message: `Apply button not found on Indeed. The job may only have "Apply on company site" option. Please check the page manually.`,
+        };
       }
 
       console.log(`  🖱️ Clicking apply button (found with: ${foundSelector})...`);
+      await applyButton.click();
       
-      // Scroll button into view before clicking
-      try {
-        await applyButton.scrollIntoViewIfNeeded();
-        await delay(500);
-      } catch (e) {
-        console.log('  ⚠️ Could not scroll button into view, continuing...');
-      }
-      
-      // Try multiple click methods if the first one doesn't work
-      let clickSuccess = false;
-      try {
-        // Method 1: Standard click
-        await applyButton.click();
-        clickSuccess = true;
-        console.log('  ✅ Button clicked (standard method), waiting for form to load...');
-      } catch (e) {
-        console.log('  ⚠️ Standard click failed, trying alternative methods...');
-        try {
-          // Method 2: Click using JavaScript
-          await page.evaluate((button: any) => {
-            if (button) {
-              (button as HTMLElement).click();
-            }
-          }, await applyButton.evaluateHandle((btn: any) => btn));
-          clickSuccess = true;
-          console.log('  ✅ Button clicked (JavaScript method), waiting for form to load...');
-        } catch (e2) {
-          console.log('  ⚠️ JavaScript click also failed, trying mouse click...');
-          try {
-            // Method 3: Mouse click
-            const box = await applyButton.boundingBox();
-            if (box) {
-              await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-              clickSuccess = true;
-              console.log('  ✅ Button clicked (mouse method), waiting for form to load...');
-            }
-          } catch (e3) {
-            console.log('  ❌ All click methods failed');
-            return {
-              success: false,
-              status: 'error',
-              message: 'Could not click the apply button. It may be disabled or require interaction.',
-            };
-          }
-        }
-      }
-      
-      if (!clickSuccess) {
-        return {
-          success: false,
-          status: 'error',
-          message: 'Failed to click the apply button.',
-        };
-      }
-      
-      // Wait for form/modal to appear - Indeed Easy Apply can take time
-      await delay(5000);
+      // Wait for form/modal to appear - could be in iframe or popup
+      await delay(3000);
       
       // Check if form opened in new window/frame
       const pages = await browser.pages();
       let activePage = page;
       if (pages.length > 1) {
-        console.log(`  📑 Form opened in new window (${pages.length} pages), switching...`);
+        console.log('  📑 Form opened in new window, switching...');
         activePage = pages[pages.length - 1];
         await activePage.bringToFront();
-        await delay(3000);
+        await delay(2000);
       }
       
-      // Wait for Indeed Easy Apply modal/iframe to load
-      console.log('  🔍 Waiting for Indeed Easy Apply form to appear...');
+      // Check for iframes (common in job applications, especially Indeed Easy Apply)
+      const frames = activePage.frames();
       let formFrame = activePage.mainFrame();
-      let formFound = false;
-      
-      // Try multiple times to find the form (Indeed can be slow)
-      for (let attempt = 0; attempt < 5; attempt++) {
-        await delay(2000);
-        
-        // Check for iframes (common in job applications, especially Indeed Easy Apply)
-        const frames = activePage.frames();
-        console.log(`  🔍 Attempt ${attempt + 1}: Found ${frames.length} frames`);
-        
-        if (frames.length > 1) {
-          for (const frame of frames) {
-            if (frame !== activePage.mainFrame()) {
-              try {
-                const hasForm = await frame.evaluate(() => {
-                  return !!(
-                    document.querySelector('form') ||
-                    document.querySelector('input[type="email"]') ||
-                    document.querySelector('input[type="text"]') ||
-                    document.querySelector('textarea') ||
-                    document.querySelector('[data-testid*="form"]') ||
-                    document.querySelector('[class*="form"]')
-                  );
-                });
-                
-                if (hasForm) {
-                  console.log('  ✅ Form found in iframe!');
-                  formFrame = frame;
-                  formFound = true;
-                  break;
-                }
-              } catch (e) {
-                // Frame might not be accessible yet
-                continue;
+      if (frames.length > 1) {
+        console.log(`  🖼️ Found ${frames.length} frames, checking for form in iframe...`);
+        for (const frame of frames) {
+          if (frame !== activePage.mainFrame()) {
+            try {
+              const iframeForm = await frame.$('form, input[type="email"], input[type="text"]');
+              if (iframeForm) {
+                console.log('  ✅ Form found in iframe, using iframe context');
+                formFrame = frame;
+                break;
               }
+            } catch (e) {
+              // Continue checking other frames
             }
           }
-        }
-        
-        // Also check main frame for form
-        if (!formFound) {
-          const mainFrameHasForm = await activePage.evaluate(() => {
-            return !!(
-              document.querySelector('form') ||
-              document.querySelector('input[type="email"]') ||
-              document.querySelector('input[type="text"]') ||
-              document.querySelector('textarea') ||
-              document.querySelector('[data-testid*="form"]') ||
-              document.querySelector('[class*="easy-apply"]') ||
-              document.querySelector('[class*="apply-form"]')
-            );
-          });
-          
-          if (mainFrameHasForm) {
-            console.log('  ✅ Form found in main frame!');
-            formFrame = activePage.mainFrame();
-            formFound = true;
-            break;
-          }
-        }
-        
-        if (formFound) break;
-        
-        // Check if we were redirected (Apply on company site)
-        const currentUrl = activePage.url();
-        if (currentUrl !== job.jobUrl && !currentUrl.includes('indeed.com')) {
-          console.log(`  🔗 Redirected to external site: ${currentUrl}`);
-          const atsType = this.detectATSType(currentUrl);
-          if (atsType) {
-            return await this.applyToATS(activePage, browser, atsType, job, config, coverLetter);
-          }
-          formFrame = activePage.mainFrame();
-          formFound = true;
-          break;
-        }
-      }
-      
-      if (!formFound) {
-        console.log('  ⚠️ Form not found after waiting, but attempting to proceed...');
-        // Take a screenshot for debugging
-        try {
-          await activePage.screenshot({ path: `debug-indeed-${Date.now()}.png` });
-          console.log('  📸 Screenshot saved for debugging');
-        } catch (e) {
-          // Screenshot failed, continue
         }
       }
 
       // Use AI to intelligently fill the form (works for both Easy Apply and external redirects)
-      console.log('  🤖 Proceeding to fill form...');
       return await this.fillFormWithAI(formFrame, activePage, config, coverLetter, job);
 
       // This section moved to fillFormWithAI method
@@ -1055,53 +687,12 @@ ${config.userProfile.fullName}`;
     try {
       console.log('🤖 Using AI to intelligently fill form...');
       
-      // First, check if there's actually a form on the page
-      const hasForm = await frame.evaluate(() => {
-        return !!(
-          document.querySelector('form') ||
-          document.querySelector('input[type="email"]') ||
-          document.querySelector('input[type="text"]') ||
-          document.querySelector('textarea') ||
-          document.querySelector('select') ||
-          document.querySelector('[data-testid*="form"]') ||
-          document.querySelector('[class*="form"]') ||
-          document.querySelector('[class*="easy-apply"]')
-        );
-      });
-      
-      if (!hasForm) {
-        console.log('  ⚠️ No form detected on page. Checking if we need to wait longer...');
-        await delay(3000);
-        
-        // Check again
-        const hasFormAfterWait = await frame.evaluate(() => {
-          return !!(
-            document.querySelector('form') ||
-            document.querySelector('input[type="email"]') ||
-            document.querySelector('input[type="text"]') ||
-            document.querySelector('textarea')
-          );
-        });
-        
-        if (!hasFormAfterWait) {
-          console.log('  ❌ Still no form found after waiting. Page might require login or manual interaction.');
-          return {
-            success: false,
-            status: 'manual_required',
-            message: 'Form not detected after clicking apply button. The page may require login or manual interaction.',
-          };
-        }
-      }
-      
-      console.log('  ✅ Form detected, analyzing structure...');
-      
       // Get all form fields and their context
       const formStructure = await frame.evaluate(() => {
         const fields: any[] = [];
         
         // Get all input fields
         const inputs = Array.from(document.querySelectorAll('input, textarea, select'));
-        console.log(`Found ${inputs.length} form fields`);
         inputs.forEach((el: any, index) => {
           const field = {
             index,
