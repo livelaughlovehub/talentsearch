@@ -27,6 +27,19 @@ export type Candidate = {
   contactedAt?: string | null;
 };
 
+export type SearchRecord = {
+  id: number;
+  skills: string;
+  clearance?: string;
+  securityClearance?: string;
+  location: string;
+  dateRange?: string;
+  date_range?: string;
+  resultsCount?: number;
+  status?: string;
+  createdAt?: string;
+};
+
 export async function createSearch(payload: SearchRequest) {
   const { data } = await api.post('/api/search', payload);
   return data;
@@ -35,6 +48,11 @@ export async function createSearch(payload: SearchRequest) {
 export async function fetchCandidates(searchId: number) {
   const { data } = await api.get(`/api/candidates/search/${searchId}`);
   return data as Candidate[];
+}
+
+export async function fetchSearchHistory() {
+  const { data } = await api.get('/api/search');
+  return data as SearchRecord[];
 }
 
 export async function updateCandidateContact(id: number, contacted: boolean) {

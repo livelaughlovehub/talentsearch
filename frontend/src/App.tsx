@@ -1,10 +1,12 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Candidate,
   JobListing,
+  SearchRecord,
   applyToJob,
   createSearch,
   fetchCandidates,
+  fetchSearchHistory,
   generateEmail,
   searchJobs,
   updateCandidateContact,
@@ -33,6 +35,9 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [emailDraft, setEmailDraft] = useState<{ subject: string; body: string } | null>(null);
   const [emailNotes, setEmailNotes] = useState('');
+  const [searchHistory, setSearchHistory] = useState<SearchRecord[]>([]);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [sourceSummary, setSourceSummary] = useState<string | null>(null);
   const [jobsQuery, setJobsQuery] = useState('');
   const [jobsLocation, setJobsLocation] = useState('');
   const [jobListings, setJobListings] = useState<JobListing[]>([]);
@@ -57,12 +62,32 @@ export default function App() {
   const handleSearch = async () => {
     setLoading(true);
     setEmailDraft(null);
+    setSearchError(null);
+    setSourceSummary(null);
     try {
       const response = await createSearch(form);
       setSearchId(response.id);
       const results = await fetchCandidates(response.id);
       setCandidates(results);
       setSelected(results[0] ?? null);
+
+      const history = await fetchSearchHistory();
+      setSearchHistory(history);
+      const url = new URL(window.location.href);
+      url.searchParams.set('searchId', String(response.id));
+      window.history.replaceState(null, '', url.toString());
+      if (response.sourcesQueried && response.sourceCounts) {
+        const summary = response.sourcesQueried
+          .map((source: string) => `${source}: ${response.sourceCounts[source] || 0}`)
+          .join(' · ');
+        setSourceSummary(summary);
+      }
+    } catch (error: any) {
+      const message =
+        error?.response?.data?.message ||
+        error?.message ||
+        'Search failed. Please try again.';
+      setSearchError(message);
     } finally {
       setLoading(false);
     }
@@ -91,6 +116,57 @@ export default function App() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    const loadHistory = async () => {
+      const history = await fetchSearchHistory();
+      setSearchHistory(history);
+    };
+    loadHistory();
+
+    const params = new URLSearchParams(window.location.search);
+    const searchIdParam = params.get('searchId');
+    if (searchIdParam) {
+      const id = Number(searchIdParam);
+      if (!Number.isNaN(id)) {
+        fetchCandidates(id).then((results) => {
+          setSearchId(id);
+          setCandidates(results);
+          setSelected(results[0] ?? null);
+        });
+      }
+    }
+  }, []);
+
+  const handleLoadHistory = async (id: number) => {
+    setLoading(true);
+    try {
+      const results = await fetchCandidates(id);
+      setSearchId(id);
+      setCandidates(results);
+      setSelected(results[0] ?? null);
+
+      const url = new URL(window.location.href);
+      url.searchParams.set('searchId', String(id));
+      window.history.replaceState(null, '', url.toString());
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const formatSearchDate = (value?: string) => {
+    if (!value) return 'Unknown date';
+    return new Date(value).toLocaleString();
+  };
+
+  const getResultsCount = (record: SearchRecord) =>
+    record.resultsCount ?? 0;
+
+  const getClearance = (record: SearchRecord) =>
+    record.clearance ?? record.securityClearance ?? 'None';
+
+  const getDateRange = (record: SearchRecord) =>
+    record.dateRange ?? record.date_range ?? '';
 
   const handleJobSearch = async () => {
     setLoading(true);
@@ -179,43 +255,82 @@ export default function App() {
             <button onClick={handleSearch} disabled={loading}>
               {loading ? 'Searching...' : 'Search for Candidates'}
             </button>
+            {searchError && <p className="status">{searchError}</p>}
             {searchId && (
               <p className="status">Search #{searchId} · {totalResults} results</p>
             )}
+            {sourceSummary && <p className="muted">{sourceSummary}</p>}
+
+            <div style={{ marginTop: 16 }}>
+              <h3>Search History</h3>
+              {searchHistory.length === 0 ? (
+                <p className="muted">No previous searches yet.</p>
+              ) : (
+                <div className="grid" style={{ marginTop: 8 }}>
+                  {searchHistory.slice(0, 8).map((record) => (
+                    <div key={record.id} className="card">
+                      <p className="muted">{formatSearchDate(record.createdAt)}</p>
+                      <p><strong>Skills:</strong> {record.skills || '—'}</p>
+                      <p><strong>Clearance:</strong> {getClearance(record)}</p>
+                      <p><strong>Location:</strong> {record.location || '—'}</p>
+                      {getDateRange(record) && (
+                        <p><strong>Date Range:</strong> {getDateRange(record)} days</p>
+                      )}
+                      <p><strong>Results:</strong> {getResultsCount(record)}</p>
+                      <button
+                        className="secondary"
+                        onClick={() => handleLoadHistory(record.id)}
+                      >
+                        View Results
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </section>
 
           <section className="panel">
             <div className="card">
               <h2>Results</h2>
               <p className="muted">Click a candidate to view details and outreach tools.</p>
-              <div className="grid" style={{ marginTop: 16 }}>
-                {candidates.map((candidate) => (
-                  <div
-                    key={candidate.id}
-                    className="card candidate-card"
-                    style={{ cursor: 'pointer', border: candidate.id === selected?.id ? '2px solid #2563eb' : '2px solid transparent' }}
-                    onClick={() => {
-                      setSelected(candidate);
-                      setEmailDraft(null);
-                    }}
-                  >
-                    <h3>{candidate.name}</h3>
-                    <p>{candidate.title}</p>
-                    <p>{candidate.company}</p>
-                    <p className="muted">{candidate.location} · {candidate.source}</p>
-                    <div>
-                      {(candidate.skills || []).slice(0, 3).map((skill) => (
-                        <span className="pill" key={skill}>{skill}</span>
+              {['LinkedIn', 'GitHub', 'Indeed', 'Dice'].map((source) => {
+                const group = candidates.filter((candidate) => candidate.source === source);
+                if (group.length === 0) return null;
+                return (
+                  <div key={source} style={{ marginTop: 16 }}>
+                    <h3>{source}</h3>
+                    <div className="grid" style={{ marginTop: 8 }}>
+                      {group.map((candidate) => (
+                        <div
+                          key={candidate.id}
+                          className="card candidate-card"
+                          style={{ cursor: 'pointer', border: candidate.id === selected?.id ? '2px solid #2563eb' : '2px solid transparent' }}
+                          onClick={() => {
+                            setSelected(candidate);
+                            setEmailDraft(null);
+                          }}
+                        >
+                          <h3>{candidate.name}</h3>
+                          <p>{candidate.title}</p>
+                          <p>{candidate.company}</p>
+                          <p className="muted">{candidate.location} · {candidate.source}</p>
+                          <div>
+                            {(candidate.skills || []).slice(0, 3).map((skill) => (
+                              <span className="pill" key={skill}>{skill}</span>
+                            ))}
+                          </div>
+                          {candidate.contacted ? (
+                            <p className="status">Contacted</p>
+                          ) : (
+                            <p className="status">Not contacted</p>
+                          )}
+                        </div>
                       ))}
                     </div>
-                    {candidate.contacted ? (
-                      <p className="status">Contacted</p>
-                    ) : (
-                      <p className="status">Not contacted</p>
-                    )}
                   </div>
-                ))}
-              </div>
+                );
+              })}
             </div>
 
             <div className="card">

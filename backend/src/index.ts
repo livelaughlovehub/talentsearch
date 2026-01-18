@@ -110,37 +110,182 @@ function createMockCandidates(count: number, skills: string[], location: string)
   return candidates;
 }
 
-async function fetchSerpApiCandidates(query: string, location: string): Promise<CandidateRecord[]> {
-  if (!process.env.SERPAPI_KEY) {
-    return [];
-  }
+type CandidateSource = {
+  id: string;
+  label: string;
+  siteQuery: string;
+  queryHint?: string;
+  urlMustInclude?: string[];
+  urlMustNotInclude?: string[];
+};
 
+const defaultCandidateSources: CandidateSource[] = [
+  {
+    id: 'linkedin',
+    label: 'LinkedIn',
+    siteQuery: 'site:linkedin.com/in',
+    queryHint: '"software engineer" OR developer OR "data engineer"',
+    urlMustInclude: ['linkedin.com/in/'],
+    urlMustNotInclude: ['linkedin.com/jobs', 'linkedin.com/company'],
+  },
+  {
+    id: 'github',
+    label: 'GitHub',
+    siteQuery: 'site:github.com',
+    queryHint: '"followers" "repositories" -topics -orgs -search -blog',
+    urlMustNotInclude: [
+      'github.com/topics',
+      'github.com/search',
+      'github.com/blog',
+      'github.com/marketplace',
+      'github.com/sponsors',
+      'github.com/collections',
+    ],
+  },
+  {
+    id: 'indeed',
+    label: 'Indeed',
+    siteQuery: 'site:indeed.com/resume OR site:indeed.com/resumes OR site:indeed.com/r/',
+    queryHint: '"resume" OR "profile"',
+    urlMustInclude: ['indeed.com/resume', 'indeed.com/resumes', 'indeed.com/r/'],
+  },
+  {
+    id: 'dice',
+    label: 'Dice',
+    siteQuery: 'site:dice.com/resume',
+    queryHint: '"resume" OR "profile"',
+    urlMustInclude: ['dice.com/resume'],
+  },
+];
+
+const enabledSourceIds = process.env.CANDIDATE_SOURCES
+  ? process.env.CANDIDATE_SOURCES.split(',').map((value) => value.trim().toLowerCase()).filter(Boolean)
+  : defaultCandidateSources.map((source) => source.id);
+
+const candidateSources = defaultCandidateSources.filter((source) => enabledSourceIds.includes(source.id));
+
+function scoreCandidateResult(text: string, skills: string[]) {
+  if (!skills.length) return 1;
+  const normalized = text.toLowerCase();
+  return skills.reduce((score, skill) => (normalized.includes(skill.toLowerCase()) ? score + 1 : score), 0);
+}
+
+const badResultKeywords = [
+  'salary',
+  'career',
+  'how to',
+  'what is',
+  'definition',
+  'hiring',
+  'apply',
+  'resume template',
+  'resume builder',
+];
+
+function containsAny(value: string, checks?: string[]) {
+  if (!checks || checks.length === 0) return false;
+  const normalized = value.toLowerCase();
+  return checks.some((check) => normalized.includes(check.toLowerCase()));
+}
+
+function isValidCandidateUrl(sourceId: string, url: string) {
   try {
-    const { data } = await axios.get('https://serpapi.com/search.json', {
-      params: {
-        engine: 'google_jobs',
-        q: query,
-        location: location || 'United States',
-        api_key: process.env.SERPAPI_KEY,
-      },
-      timeout: 15000,
-    });
+    const parsed = new URL(url);
+    const pathParts = parsed.pathname.split('/').filter(Boolean);
+    if (sourceId === 'linkedin') {
+      return parsed.hostname.includes('linkedin.com') && parsed.pathname.includes('/in/');
+    }
+    if (sourceId === 'github') {
+      if (!parsed.hostname.includes('github.com')) return false;
+      if (pathParts.length < 1) return false;
+      const blocked = new Set([
+        'orgs',
+        'topics',
+        'search',
+        'blog',
+        'marketplace',
+        'sponsors',
+        'collections',
+        'features',
+        'about',
+        'pricing',
+        'contact',
+        'security',
+        'login',
+        'join',
+      ]);
+      return !blocked.has(pathParts[0].toLowerCase());
+    }
+    if (sourceId === 'indeed') {
+      return url.includes('/r/') || url.includes('/resumes/') || url.includes('/resume/');
+    }
+    if (sourceId === 'dice') {
+      return url.includes('/resume');
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-    const results = Array.isArray(data.jobs_results) ? data.jobs_results : [];
-    return results.slice(0, 10).map((job: any) => ({
-      name: job?.company_name ? `${job.company_name} Candidate` : 'Candidate',
-      title: job?.title || 'Job Candidate',
-      company: job?.company_name || 'Unknown Company',
-      location: job?.location || location || 'Remote',
-      skills: [],
-      summary: job?.description?.slice(0, 160) || 'Sourced from SerpAPI jobs search.',
-      source: 'SerpAPI',
-      profileUrl: job?.related_links?.[0]?.link || job?.share_link || '',
-      resumeUrl: '',
-    }));
-  } catch (error) {
+async function fetchSerpApiCandidates(skills: string[], location: string): Promise<CandidateRecord[]> {
+  if (!process.env.SERPAPI_KEY || process.env.CANDIDATE_SERPAPI_ENABLED !== 'true') {
     return [];
   }
+
+  const queryBase = skills.length ? skills.join(' ') : 'software engineer';
+
+  const fetches = candidateSources.map(async (source) => {
+    try {
+      const { data } = await axios.get('https://serpapi.com/search.json', {
+        params: {
+          engine: 'google',
+          q: `${queryBase} ${location || ''} ${source.siteQuery} ${source.queryHint || ''}`.trim(),
+          location: location || 'United States',
+          api_key: process.env.SERPAPI_KEY,
+        },
+        timeout: 12000,
+      });
+
+      const organic = Array.isArray(data.organic_results) ? data.organic_results : [];
+      return organic
+        .map((result: any) => {
+          const title = result?.title || 'Candidate';
+          const snippet = result?.snippet || '';
+          const score = scoreCandidateResult(`${title} ${snippet}`, skills);
+          return { result, score };
+        })
+        .filter((entry) => {
+          const title = entry.result?.title || '';
+          const snippet = entry.result?.snippet || '';
+          const url = entry.result?.link || '';
+          if (containsAny(`${title} ${snippet}`, badResultKeywords)) return false;
+          if (source.urlMustInclude && !containsAny(url, source.urlMustInclude)) return false;
+          if (source.urlMustNotInclude && containsAny(url, source.urlMustNotInclude)) return false;
+          if (!isValidCandidateUrl(source.id, url)) return false;
+          return true;
+        })
+        .filter((entry) => (skills.length ? entry.score > 0 : true))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 3)
+        .map(({ result }) => ({
+          name: result?.title?.split(' | ')[0] || 'Candidate',
+          title: result?.snippet?.split(' · ')[0] || 'Candidate',
+          company: source.label,
+          location: location || 'Remote',
+          skills: [],
+          summary: result?.snippet || 'Sourced from SerpAPI search.',
+          source: source.label,
+          profileUrl: result?.link || '',
+          resumeUrl: '',
+        }));
+    } catch (error) {
+      return [];
+    }
+  });
+
+  const settled = await Promise.allSettled(fetches);
+  return settled.flatMap((result) => (result.status === 'fulfilled' ? result.value : []));
 }
 
 async function fetchSerpApiJobs(query: string, location: string): Promise<JobListing[]> {
@@ -224,14 +369,22 @@ app.post('/api/search', async (req, res) => {
   const result = insertSearch.run(...insertValues);
   const searchId = Number(result.lastInsertRowid);
 
-  const serpCandidates = await fetchSerpApiCandidates(
-    [skills, clearance, location].filter(Boolean).join(' '),
-    location
-  );
+  if (process.env.CANDIDATE_SERPAPI_ENABLED !== 'true') {
+    res.status(400).json({
+      message: 'Real candidate search is disabled. Set CANDIDATE_SERPAPI_ENABLED=true to enable SerpAPI.',
+    });
+    return;
+  }
+  if (skillList.length === 0) {
+    res.status(400).json({
+      message: 'Please enter at least one skill to find real candidates.',
+    });
+    return;
+  }
 
-  const candidates = serpCandidates.length
-    ? serpCandidates
-    : createMockCandidates(8, skillList, location);
+  const serpCandidates = await fetchSerpApiCandidates(skillList, location);
+
+  const candidates = serpCandidates;
 
   const candidateInsertColumns: string[] = [];
   if (hasCandidateSearchId) candidateInsertColumns.push('searchId');
@@ -277,7 +430,18 @@ app.post('/api/search', async (req, res) => {
     database.prepare(`UPDATE searches SET ${resultsCountColumn} = ? WHERE id = ?`).run(candidates.length, searchId);
   }
 
-  res.json({ id: searchId, status: 'completed', resultsCount: candidates.length });
+  const sourceCounts = candidates.reduce<Record<string, number>>((acc, candidate) => {
+    acc[candidate.source] = (acc[candidate.source] || 0) + 1;
+    return acc;
+  }, {});
+
+  res.json({
+    id: searchId,
+    status: 'completed',
+    resultsCount: candidates.length,
+    sourcesQueried: candidateSources.map((source) => source.label),
+    sourceCounts,
+  });
 });
 
 app.get('/api/search', (_req, res) => {
