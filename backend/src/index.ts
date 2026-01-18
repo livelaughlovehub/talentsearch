@@ -228,6 +228,8 @@ function isValidCandidateUrl(sourceId: string, url: string) {
   }
 }
 
+type SerpEntry = { result: any; score: number };
+
 async function fetchSerpApiCandidates(skills: string[], location: string): Promise<CandidateRecord[]> {
   if (!process.env.SERPAPI_KEY || process.env.CANDIDATE_SERPAPI_ENABLED !== 'true') {
     return [];
@@ -255,7 +257,7 @@ async function fetchSerpApiCandidates(skills: string[], location: string): Promi
           const score = scoreCandidateResult(`${title} ${snippet}`, skills);
           return { result, score };
         })
-        .filter((entry: { result: any; score: number }) => {
+        .filter((entry: SerpEntry) => {
           const title = entry.result?.title || '';
           const snippet = entry.result?.snippet || '';
           const url = entry.result?.link || '';
@@ -265,10 +267,10 @@ async function fetchSerpApiCandidates(skills: string[], location: string): Promi
           if (!isValidCandidateUrl(source.id, url)) return false;
           return true;
         })
-        .filter((entry: { result: any; score: number }) => (skills.length ? entry.score > 0 : true))
-        .sort((a: { score: number }, b: { score: number }) => b.score - a.score)
+        .filter((entry: SerpEntry) => (skills.length ? entry.score > 0 : true))
+        .sort((a: SerpEntry, b: SerpEntry) => b.score - a.score)
         .slice(0, 3)
-        .map(({ result }: { result: any }) => ({
+        .map(({ result }: SerpEntry) => ({
           name: result?.title?.split(' | ')[0] || 'Candidate',
           title: result?.snippet?.split(' · ')[0] || 'Candidate',
           company: source.label,
@@ -502,7 +504,7 @@ app.patch('/api/candidates/:id', (req, res) => {
   }
 
   const updated = database.prepare('SELECT * FROM candidates WHERE id = ?').get(req.params.id) as any;
-  res.json({ ...updated, skills: safeJsonParse(updated?.skills) });
+  res.json({ ...(updated || {}), skills: safeJsonParse(updated?.skills) });
 });
 
 app.post('/api/email/generate', async (req, res) => {
