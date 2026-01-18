@@ -452,7 +452,7 @@ app.get('/api/search', (_req, res) => {
 });
 
 app.get('/api/search/:id', (req, res) => {
-  const search = database.prepare('SELECT * FROM searches WHERE id = ?').get(req.params.id);
+  const search = database.prepare('SELECT * FROM searches WHERE id = ?').get(req.params.id) as any;
   if (!search) {
     res.status(404).json({ message: 'Search not found' });
     return;
