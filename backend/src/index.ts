@@ -255,7 +255,7 @@ async function fetchSerpApiCandidates(skills: string[], location: string): Promi
           const score = scoreCandidateResult(`${title} ${snippet}`, skills);
           return { result, score };
         })
-        .filter((entry) => {
+        .filter((entry: { result: any; score: number }) => {
           const title = entry.result?.title || '';
           const snippet = entry.result?.snippet || '';
           const url = entry.result?.link || '';
@@ -265,10 +265,10 @@ async function fetchSerpApiCandidates(skills: string[], location: string): Promi
           if (!isValidCandidateUrl(source.id, url)) return false;
           return true;
         })
-        .filter((entry) => (skills.length ? entry.score > 0 : true))
-        .sort((a, b) => b.score - a.score)
+        .filter((entry: { result: any; score: number }) => (skills.length ? entry.score > 0 : true))
+        .sort((a: { score: number }, b: { score: number }) => b.score - a.score)
         .slice(0, 3)
-        .map(({ result }) => ({
+        .map(({ result }: { result: any }) => ({
           name: result?.title?.split(' | ')[0] || 'Candidate',
           title: result?.snippet?.split(' · ')[0] || 'Candidate',
           company: source.label,
@@ -466,7 +466,7 @@ app.get('/api/candidates/search/:searchId', (req, res) => {
 });
 
 app.get('/api/candidates/:id', (req, res) => {
-  const row = database.prepare('SELECT * FROM candidates WHERE id = ?').get(req.params.id);
+  const row = database.prepare('SELECT * FROM candidates WHERE id = ?').get(req.params.id) as any;
   if (!row) {
     res.status(404).json({ message: 'Candidate not found' });
     return;
@@ -501,8 +501,8 @@ app.patch('/api/candidates/:id', (req, res) => {
     return;
   }
 
-  const updated = database.prepare('SELECT * FROM candidates WHERE id = ?').get(req.params.id);
-  res.json({ ...updated, skills: safeJsonParse(updated.skills) });
+  const updated = database.prepare('SELECT * FROM candidates WHERE id = ?').get(req.params.id) as any;
+  res.json({ ...updated, skills: safeJsonParse(updated?.skills) });
 });
 
 app.post('/api/email/generate', async (req, res) => {
@@ -512,7 +512,7 @@ app.post('/api/email/generate', async (req, res) => {
     return;
   }
 
-  const candidate = database.prepare('SELECT * FROM candidates WHERE id = ?').get(candidateId);
+  const candidate = database.prepare('SELECT * FROM candidates WHERE id = ?').get(candidateId) as any;
   if (!candidate) {
     res.status(404).json({ message: 'Candidate not found' });
     return;

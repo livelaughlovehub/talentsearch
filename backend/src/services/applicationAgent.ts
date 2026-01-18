@@ -1,5 +1,5 @@
 import puppeteer from 'puppeteer';
-import { database } from '../database';
+import { database } from '../database/index.js';
 import Anthropic from '@anthropic-ai/sdk';
 import * as path from 'path';
 import * as fs from 'fs';
